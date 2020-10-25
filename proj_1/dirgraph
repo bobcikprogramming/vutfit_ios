@@ -1,0 +1,243 @@
+#!/bin/sh
+
+POSIXLY_CORRECT=yes
+
+ignored=""		# ignorované složky
+normalization=false	# normalizace
+lenghtOfLine=79		# délka řádku (pokud nejsme v terminálu)
+lenghtOfCate=12		# délka kategorie
+largest=0		# největší kategorie
+permDenied=false	# bool hodnota, jenž kontroluje přístup do složky/souboru
+numOfDir=0		# počet adresářů
+numOfFile=0		# počet souborů
+first=0			# <100 B
+second=0		# <1 KiB
+third=0			# <10 KiB
+fourth=0		# <100 KiB
+fifth=0			# <1 MiB
+sixth=0			# <10 MiB
+seventh=0		# <100 MiB
+eight=0			# <1 GiB
+ninth=0			# >=1 GiB
+
+## Zkontroluji počet argumentů
+if [ $# -gt 4  ]
+then
+	echo "Chyba! Příliš mnoho argumentů.">&2
+	exit 1
+fi
+
+## Zkontroluji a posunu zadané argumenty
+while getopts ':ni:' opt
+do
+	case ${opt} in
+		i) ignored=${OPTARG}
+			if [ "$ignored" = "-n" ]
+			then
+				echo "Chyba! Prosím uveďte soubor za přepínač -i." >&2
+				exit 1
+			fi;;
+
+		n) normalization=true;;
+		?) echo "Chyba! Neplatný přepínač." >&2; exit 1;;
+	esac
+done
+
+shift $((OPTIND -1))
+
+## Zkontroluji, zdali uživatel nezadal kořenový adresář jako cestu k ignorování
+if [ "$ignored" = "/" ]
+then
+	echo "Chyba! Prosím nevkládejte kořenový adresář." >&2
+	exit 1
+fi
+
+## Jednáli se o terminál, zjistím délku řádku
+if [ -t 1 ]
+then
+	width=$((`tput cols` - 1))
+fi
+
+## Přičteme soubor dle jeho velikosti k dané kategorii
+# $1 - soubor k přiřazení
+addToCategory() {
+
+	size=$(wc -c < "$1" | xargs) > /dev/null 2>&1
+
+	if [ $size -lt 100 ]					# < 100 B
+	then
+		first=$((first + 1))
+	elif [ $size -ge 100 -a $size -lt 1024 ]		# < 1 KiB
+	then
+		second=$((second + 1))
+	elif [ $size -ge 1024 -a $size -lt 10240 ]              # < 10 KiB
+        then
+                third=$((third + 1))
+	elif [ $size -ge 10240 -a $size -lt 102400 ]            # < 100 KiB
+        then
+               	fourth=$((fourth + 1))
+	elif [ $size -ge 102400 -a $size -lt 1048576 ]          # < 1 MiB
+        then
+                fifth=$((fifth + 1))
+	elif [ $size -ge 1048576 -a $size -lt 10485760 ]        # < 10 MiB
+        then
+                sixth=$((sixth + 1))
+	elif [ $size -ge 10485760 -a $size -lt 104857600 ]      # < 100 MiB
+        then
+                seventh=$((seventh + 1))
+	elif [ $size -ge 104857600 -a $size -lt 1073741824 ]    # < 1 GiB
+        then
+                eight=$((eight + 1))
+	elif [ $size -gt 1073741824 ]		                # => 1 GiB
+        then
+                ninth=$((ninth + 1))
+	fi
+}
+
+## Zkontrolujeme a vypíšeme root directory
+if [ "$1" = "" ]
+	then
+		echo "Root directory: $(pwd)"
+	else
+		if cd "$1" 2>/dev/null
+		then
+			echo "Root directory: $1"
+		else
+			echo "Chyba! Neplatná cesta." >&2
+			exit 1
+		fi
+	fi
+
+## Načteme soubory a adresáře
+## Dále je rozdělíme a zkontrolujeme jejich oprávnění
+if [ "$ignored" = "" ]
+then
+	files=`find . -type d -o -type f 2>&1` #| grep -v "Permission denied"`
+else
+	files=`find . -type d -o -type f \( -not -ipath "*$ignored*" ! -iname "*$ignored*" \) 2>&1` #| grep -v "Permission denied"`
+fi	
+
+IFSSave=$IFS
+#IFS=$'\n'
+IFS="
+"
+
+for f in $files
+do
+	if [ -r "$f" ]
+	then
+		if [ -d "$f" ]
+		then
+			numOfDir=$(( numOfDir + 1 ))
+			#if ! [ -r "$f" ]
+			#then
+			#	permDenied=true
+			#fi
+		elif [ -f "$f" ]
+		then
+			numOfFile=$(( numOfFile + 1 ))
+			addToCategory $f
+			#if ! [ -r "$f" ]
+			#then
+			#	permDenied=true
+			#fi
+		fi
+	else
+		permDenied=true
+	fi			
+done
+
+IFS=$IFSSave
+
+echo "Directories: $numOfDir"
+echo "All files: $numOfFile"
+echo "File size histogram:"
+
+## Najdeme největší kategorii
+largest=$first
+if [ $second -gt $largest ]
+then largest=$second
+fi
+if [ $third -gt $largest ]
+then largest=$third
+fi
+if [ $fourth -gt $largest ]
+then largest=$fourth
+fi
+if [ $fifth -gt $largest ]
+then largest=$fifth
+fi
+if [ $sixth -gt $largest ]
+then largest=$sixth
+fi
+if [ $seventh -gt $largest ]
+then largest=$seventh
+fi
+if [ $eight -gt $largest ]
+then largest=$eight
+fi
+if [ $ninth -gt $largest ]
+then largest=$ninth
+fi
+
+## Zkontroluji, zdali má dané kategorie nějakou délku
+## Nastavím délku řádku podle toho, jestli byl nebo nebyl zadán parametru -n
+## Tisknu "#"
+# $1 - délka kategorie
+# $2 - délka řádku
+# $3 - délka nejdelší kategorie
+# $4 - boolean hodnota normalizace
+printLenght() {
+	lenght=$1
+	lenghtOfFileShorter=$(( $2 - lenghtOfCate ))
+	if [ $1 -eq 0 ]
+	then
+		echo
+		return 0
+	fi
+
+	if [ $4 = true -a $3 -gt $lenghtOfFileShorter ]
+	then
+		lenght=$(( (lenght * lenghtOfFileShorter) / $3 ))
+	fi
+
+	i=0
+	while [ $i -lt $lenght ]
+	do
+		 echo -n "#"
+		i=$((i + 1))
+	done
+
+	echo
+}
+
+## Pro danou kategorii volám tisk "#"
+echo -n "  <100 B  : "
+	printLenght $first  $lenghtOfLine $largest $normalization
+echo -n "  <1 KiB  : "
+	printLenght $second  $lenghtOfLine $largest $normalization
+echo -n "  <10 KiB : "
+	printLenght $third  $lenghtOfLine $largest $normalization
+echo -n "  <100 KiB: "
+	printLenght $fourth  $lenghtOfLine $largest $normalization
+echo -n "  <1 MiB  : "
+	printLenght $fifth  $lenghtOfLine $largest $normalization
+echo -n "  <10 MiB : "
+	printLenght $sixth  $lenghtOfLine $largest $normalization
+echo -n "  <100 MiB: "
+	printLenght $seventh  $lenghtOfLine $largest $normalization
+echo -n "  <1 GiB  : "
+	printLenght $eight  $lenghtOfLine $largest $normalization
+echo -n "  >=1 GiB : "
+	printLenght $ninth  $lenghtOfLine $largest $normalization
+
+## Pokud se vyskytl adresář či složka ke kterému nemáme práva, 
+## vypíšeme na konci skriptu chybové hlášení a ukončíme jej s chybou
+if [ $permDenied = true ]
+then
+	echo "Chyba! Nalezeny adresáře/soubory bez práv k přístupu." >&2
+	exit 1
+fi
+
+exit 0
+
